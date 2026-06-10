@@ -91,6 +91,21 @@ struct private_diffie_hellman_t {
 	WC_RNG rng;
 };
 
+/**
+ * Check if a shared secret consists entirely of zero bytes.
+ */
+static bool shared_secret_is_zero(const u_char *secret, size_t len)
+{
+	u_char d = 0;
+	size_t i;
+
+	for (i = 0; i < len; i++)
+	{
+		d |= secret[i];
+	}
+	return d == 0;
+}
+
 #ifdef HAVE_CURVE25519
 
 METHOD(key_exchange_t, get_shared_secret_25519, bool,
@@ -105,6 +120,14 @@ METHOD(key_exchange_t, get_shared_secret_25519, bool,
 					this->shared_secret.ptr, &len, EC25519_LITTLE_ENDIAN) != 0)
 		{
 			DBG1(DBG_LIB, "%N shared secret computation failed",
+				 key_exchange_method_names, this->group);
+			chunk_clear(&this->shared_secret);
+			return FALSE;
+		}
+		this->shared_secret.len = len;
+		if (shared_secret_is_zero(this->shared_secret.ptr, len))
+		{
+			DBG1(DBG_LIB, "%N all-zero shared secret rejected",
 				 key_exchange_method_names, this->group);
 			chunk_clear(&this->shared_secret);
 			return FALSE;
@@ -194,6 +217,14 @@ METHOD(key_exchange_t, get_shared_secret_448, bool,
 					this->shared_secret.ptr, &len, EC448_LITTLE_ENDIAN) != 0)
 		{
 			DBG1(DBG_LIB, "%N shared secret computation failed",
+				 key_exchange_method_names, this->group);
+			chunk_clear(&this->shared_secret);
+			return FALSE;
+		}
+		this->shared_secret.len = len;
+		if (shared_secret_is_zero(this->shared_secret.ptr, len))
+		{
+			DBG1(DBG_LIB, "%N all-zero shared secret rejected",
 				 key_exchange_method_names, this->group);
 			chunk_clear(&this->shared_secret);
 			return FALSE;
