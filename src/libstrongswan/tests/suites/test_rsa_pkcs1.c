@@ -248,6 +248,28 @@ START_TEST(test_rsa_2048_pkcs1)
 }
 END_TEST
 
+START_TEST(test_rsa_2048_pkcs1_invalid)
+{
+	private_key_t *privkey;
+	chunk_t msg = chunk_empty, ct;
+
+	privkey = lib->creds->create(lib->creds, CRED_PRIVATE_KEY, KEY_ANY,
+								 BUILD_BLOB_ASN1_DER, rsa_2048_key, BUILD_END);
+	ck_assert(privkey != NULL);
+	ck_assert(privkey->get_type(privkey) == KEY_RSA);
+
+	ct = chunk_alloc(rsa_2048_pkcs1_tests[0].ct.len);
+	memset(ct.ptr, 0, ct.len);
+
+	ck_assert(!privkey->decrypt(privkey, ENCRYPT_RSA_PKCS1, NULL, ct, &msg));
+	ck_assert(msg.ptr == NULL);
+	ck_assert(msg.len == 0);
+
+	chunk_free(&ct);
+	privkey->destroy(privkey);
+}
+END_TEST
+
 Suite *rsa_pkcs1_suite_create()
 {
 	Suite *s;
@@ -257,6 +279,7 @@ Suite *rsa_pkcs1_suite_create()
 
 	tc = tcase_create("rsa_2048_pkcs1");
 	tcase_add_loop_test(tc, test_rsa_2048_pkcs1, 0, countof(rsa_2048_pkcs1_tests));
+	tcase_add_test(tc, test_rsa_2048_pkcs1_invalid);
 	suite_add_tcase(s, tc);
 
 	return s;
