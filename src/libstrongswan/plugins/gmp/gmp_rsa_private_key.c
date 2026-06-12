@@ -39,6 +39,11 @@
  */
 #define PUBLIC_EXPONENT 0x10001
 
+/**
+ * Minimum number of PKCS#1 v1.5 padding bytes.
+ */
+#define MIN_PS_PADDING 8
+
 typedef struct private_gmp_rsa_private_key_t private_gmp_rsa_private_key_t;
 
 /**
@@ -491,12 +496,53 @@ METHOD(private_key_t, sign, bool,
 	}
 }
 
+/**
+ * Parse an EME-PKCS1-v1_5 encoded block without data-dependent early exits.
+ */
+static bool eme_pkcs1_v1_5_decode(chunk_t em, chunk_t *plain)
+{
+	chunk_t stripped;
+	size_t i, sep = em.len - 1;
+	uint8_t valid = em.len >= (MIN_PS_PADDING + 3), found = FALSE;
+
+	valid &= em.ptr[0] == 0x00;
+	valid &= em.ptr[1] == 0x02;
+
+	for (i = 2; i < em.len; i++)
+	{
+		uint8_t is_zero = em.ptr[i] == 0x00;
+		uint8_t first = is_zero & (found ^ 0x01);
+		size_t mask = (size_t)-first;
+
+		sep ^= mask & (sep ^ i);
+		valid &= (first & (i < (MIN_PS_PADDING + 2))) ^ 0x01;
+		found |= is_zero;
+	}
+	valid &= found;
+	valid &= sep < (em.len - 1);
+	if (!valid)
+	{
+		*plain = chunk_empty;
+		return FALSE;
+	}
+
+	stripped = chunk_skip(em, sep + 1);
+	*plain = stripped.len ? chunk_alloc(stripped.len) : chunk_empty;
+	if (stripped.len && !plain->ptr)
+	{
+		*plain = chunk_empty;
+		return FALSE;
+	}
+	memcpy(plain->ptr, stripped.ptr, stripped.len);
+	return TRUE;
+}
+
 METHOD(private_key_t, decrypt, bool,
 	private_gmp_rsa_private_key_t *this, encryption_scheme_t scheme,
 	void *params, chunk_t crypto, chunk_t *plain)
 {
-	chunk_t em, stripped;
-	bool success = FALSE;
+	chunk_t em;
+	bool success;
 
 	if (scheme != ENCRYPT_RSA_PKCS1)
 	{
@@ -505,31 +551,25 @@ METHOD(private_key_t, decrypt, bool,
 		return FALSE;
 	}
 	/* rsa decryption using PKCS#1 RSADP */
-	stripped = em = rsadp(this, crypto);
+	em = rsadp(this, crypto);
+	if (!em.len)
+	{
+		em = chunk_alloc(this->k);
+		if (!em.ptr)
+		{
+			*plain = chunk_empty;
+			return FALSE;
+		}
+		memset(em.ptr, 0, em.len);
+	}
 
 	/* PKCS#1 v1.5 8.1 encryption-block formatting (EB = 00 || 02 || PS || 00 || D) */
-
-	/* check for hex pattern 00 02 in decrypted message */
-	if ((*stripped.ptr++ != 0x00) || (*(stripped.ptr++) != 0x02))
+	success = eme_pkcs1_v1_5_decode(em, plain);
+	if (!success)
 	{
-		DBG1(DBG_LIB, "incorrect padding - probably wrong rsa key");
-		goto end;
+		DBG1(DBG_LIB, "incorrect PKCS#1 v1.5 padding - probably wrong rsa key");
+		chunk_clear(plain);
 	}
-	stripped.len -= 2;
-
-	/* the plaintext data starts after first 0x00 byte */
-	while (stripped.len-- > 0 && *stripped.ptr++ != 0x00)
-
-	if (stripped.len == 0)
-	{
-		DBG1(DBG_LIB, "no plaintext data");
-		goto end;
-	}
-
-	*plain = chunk_clone(stripped);
-	success = TRUE;
-
-end:
 	chunk_clear(&em);
 	return success;
 }
